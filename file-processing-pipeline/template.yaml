@@ -2,7 +2,8 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
   Serverless File-Processing Pipeline
-  S3 upload triggers Lambda (image resize / PDF parsing), metadata stored in DynamoDB
+  S3 upload triggers Lambda (image resize / PDF parsing), metadata stored in DynamoDB,
+  status API + static dashboard for viewing results
 
 Globals:
   Function:
@@ -13,6 +14,11 @@ Globals:
       Variables:
         TABLE_NAME: !Ref FileMetadataTable
         PROCESSED_BUCKET: !Ref ProcessedBucket
+  Api:
+    Cors:
+      AllowMethods: "'GET,OPTIONS'"
+      AllowHeaders: "'Content-Type'"
+      AllowOrigin: "'*'"
 
 Resources:
 
@@ -31,7 +37,7 @@ Resources:
         Name: fileId
         Type: String
 
-  # ---------- Image Resize Lambda (no Events block here) ----------
+  # ---------- Image Resize Lambda ----------
   ImageResizeFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -45,7 +51,7 @@ Resources:
         - DynamoDBCrudPolicy:
             TableName: !Ref FileMetadataTable
 
-  # ---------- PDF Parse Lambda (no Events block here) ----------
+  # ---------- PDF Parse Lambda ----------
   PdfParseFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -59,7 +65,23 @@ Resources:
         - DynamoDBCrudPolicy:
             TableName: !Ref FileMetadataTable
 
-  # ---------- Permissions letting S3 invoke each Lambda ----------
+  # ---------- Status API Lambda ----------
+  StatusApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: status-api/
+      Handler: app.handler
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref FileMetadataTable
+      Events:
+        GetFiles:
+          Type: Api
+          Properties:
+            Path: /files
+            Method: GET
+
+  # ---------- Permissions letting S3 invoke each processing Lambda ----------
   ImageResizeFunctionPermission:
     Type: AWS::Lambda::Permission
     Properties:
@@ -103,6 +125,30 @@ Resources:
                     Value: .pdf
             Function: !GetAtt PdfParseFunction.Arn
 
+  # ---------- Dashboard Hosting Bucket ----------
+  DashboardBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "file-pipeline-dashboard-${AWS::AccountId}"
+      WebsiteConfiguration:
+        IndexDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+
+  DashboardBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DashboardBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: "s3:GetObject"
+            Resource: !Sub "arn:aws:s3:::file-pipeline-dashboard-${AWS::AccountId}/*"
+
 Outputs:
   UploadBucketName:
     Value: !Ref UploadBucket
@@ -110,3 +156,11 @@ Outputs:
     Value: !Ref ProcessedBucket
   MetadataTableName:
     Value: !Ref FileMetadataTable
+  StatusApiUrl:
+    Description: "Base URL for the status API"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/files"
+  DashboardBucketName:
+    Value: !Ref DashboardBucket
+  DashboardUrl:
+    Description: "Public URL for the dashboard"
+    Value: !Sub "http://file-pipeline-dashboard-${AWS::AccountId}.s3-website.${AWS::Region}.amazonaws.com"
