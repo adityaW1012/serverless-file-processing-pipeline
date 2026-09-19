@@ -1,127 +1,144 @@
-# file-processing-pipeline
+# Serverless File-Processing Pipeline
 
-This project contains source code and supporting files for a serverless application that you can deploy with the SAM CLI. It includes the following files and folders.
+A fully event-driven, serverless pipeline built on AWS. Uploading a file to S3 automatically triggers processing — no manual invocation needed.
 
-- hello-world - Code for the application's Lambda function.
-- events - Invocation events that you can use to invoke the function.
-- hello-world/tests - Unit tests for the application code. 
-- template.yaml - A template that defines the application's AWS resources.
+## Architecture
 
-The application uses several AWS resources, including Lambda functions and an API Gateway API. These resources are defined in the `template.yaml` file in this project. You can update the template to add AWS resources through the same deployment process that updates your application code.
+```
+                 ┌─────────────────────┐
+   User/App ───► │   S3: Upload Bucket │
+                 └──────────┬──────────┘
+                            │ ObjectCreated event
+              ┌─────────────┴─────────────┐
+              │                           │
+     suffix: .jpg                 suffix: .pdf
+              │                           │
+              ▼                           ▼
+   ┌─────────────────────┐   ┌─────────────────────┐
+   │ Lambda:              │   │ Lambda:              │
+   │ ImageResizeFunction  │   │ PdfParseFunction     │
+   │ (sharp)              │   │ (pdf-parse)          │
+   └──────────┬───────────┘   └──────────┬───────────┘
+              │                          │
+              ▼                          ▼
+   ┌─────────────────────────────────────────────┐
+   │        S3: Processed Bucket                  │
+   │  /thumbnails/*.jpg   /extracted-text/*.txt   │
+   └───────────────────────────────────────────────┘
+              │                          │
+              └────────────┬─────────────┘
+                            ▼
+                 ┌─────────────────────┐
+                 │  DynamoDB:           │
+                 │  FileMetadata table  │
+                 └─────────────────────┘
+```
 
-If you prefer to use an integrated development environment (IDE) to build and test your application, you can use the AWS Toolkit.  
-The AWS Toolkit is an open source plug-in for popular IDEs that uses the SAM CLI to build and deploy serverless applications on AWS. The AWS Toolkit also adds a simplified step-through debugging experience for Lambda function code. See the following links to get started.
+- **Trigger:** S3 event notifications route uploads to the correct Lambda based on file suffix — no manual routing logic needed.
+- **Image processing:** resizes uploaded images to a 300px-wide thumbnail using `sharp`.
+- **PDF processing:** extracts text and page count using `pdf-parse`, saves the full text to S3 and a 500-character preview to DynamoDB (to stay under DynamoDB's 400KB item limit).
+- **Metadata tracking:** every file — successful or failed — gets a record in DynamoDB with a unique `fileId`, status, timestamps, and source/destination keys.
 
-* [CLion](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [GoLand](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [IntelliJ](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [WebStorm](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [Rider](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [PhpStorm](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [PyCharm](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [RubyMine](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [DataGrip](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [VS Code](https://docs.aws.amazon.com/toolkit-for-vscode/latest/userguide/welcome.html)
-* [Visual Studio](https://docs.aws.amazon.com/toolkit-for-visual-studio/latest/user-guide/welcome.html)
+## Tech stack
 
-## Deploy the sample application
+| Component | Choice |
+|---|---|
+| Runtime | Node.js 20.x |
+| IaC / deploy tool | AWS SAM |
+| Compute | AWS Lambda |
+| Storage | Amazon S3 (2 buckets: uploads, processed) |
+| Metadata store | Amazon DynamoDB |
+| Image processing | `sharp` |
+| PDF processing | `pdf-parse` |
 
-The Serverless Application Model Command Line Interface (SAM CLI) is an extension of the AWS CLI that adds functionality for building and testing Lambda applications. It uses Docker to run your functions in an Amazon Linux environment that matches Lambda. It can also emulate your application's build environment and API.
+## Project structure
 
-To use the SAM CLI, you need the following tools.
+```
+file-processing-pipeline/
+├── template.yaml          # SAM/CloudFormation infrastructure definition
+├── samconfig.toml         # Saved deploy configuration
+├── image-resize/
+│   ├── app.mjs             # Image resize Lambda handler
+│   └── package.json
+├── pdf-parse/
+│   ├── app.mjs             # PDF parsing Lambda handler
+│   └── package.json
+└── events/                 # Sample test events for local invocation
+```
 
-* SAM CLI - [Install the SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-sam-cli-install.html)
-* Node.js - [Install Node.js 24](https://nodejs.org/en/), including the NPM package management tool.
-* Docker - [Install Docker community edition](https://hub.docker.com/search/?type=edition&offering=community)
+## Prerequisites
 
-To build and deploy your application for the first time, run the following in your shell:
+- Node.js 20+
+- AWS CLI v2, configured (`aws configure`)
+- AWS SAM CLI
+- Docker Desktop (with WSL2 backend on Windows) — required for `sam build --use-container`, which compiles native dependencies (`sharp`) against Amazon Linux rather than your local OS
+
+## Build & deploy
 
 ```bash
-sam build
+# Install dependencies for each function
+cd image-resize && npm install && cd ..
+cd pdf-parse && npm install && cd ..
+
+# Build inside a Lambda-matching container (important for sharp's native binaries)
+sam build --use-container
+
+# Deploy (first time)
 sam deploy --guided
+
+# Deploy (subsequent updates)
+sam deploy
 ```
 
-The first command will build the source of your application. The second command will package and deploy your application to AWS, with a series of prompts:
+## Testing
 
-* **Stack Name**: The name of the stack to deploy to CloudFormation. This should be unique to your account and region, and a good starting point would be something matching your project name.
-* **AWS Region**: The AWS region you want to deploy your app to.
-* **Confirm changes before deploy**: If set to yes, any change sets will be shown to you before execution for manual review. If set to no, the AWS SAM CLI will automatically deploy application changes.
-* **Allow SAM CLI IAM role creation**: Many AWS SAM templates, including this example, create AWS IAM roles required for the AWS Lambda function(s) included to access AWS services. By default, these are scoped down to minimum required permissions. To deploy an AWS CloudFormation stack which creates or modifies IAM roles, the `CAPABILITY_IAM` value for `capabilities` must be provided. If permission isn't provided through this prompt, to deploy this example you must explicitly pass `--capabilities CAPABILITY_IAM` to the `sam deploy` command.
-* **Save arguments to samconfig.toml**: If set to yes, your choices will be saved to a configuration file inside the project, so that in the future you can just re-run `sam deploy` without parameters to deploy changes to your application.
-
-You can find your API Gateway Endpoint URL in the output values displayed after deployment.
-
-## Use the SAM CLI to build and test locally
-
-Build your application with the `sam build` command.
+Upload a file directly to the upload bucket and watch it get processed automatically:
 
 ```bash
-file-processing-pipeline$ sam build
+# Image
+aws s3 cp test-image.jpg s3://file-pipeline-uploads-<ACCOUNT_ID>/test-image.jpg --region ap-south-1
+
+# PDF
+aws s3 cp test.pdf s3://file-pipeline-uploads-<ACCOUNT_ID>/test.pdf --region ap-south-1
 ```
 
-The SAM CLI installs dependencies defined in `hello-world/package.json`, creates a deployment package, and saves it in the `.aws-sam/build` folder.
-
-Test a single function by invoking it directly with a test event. An event is a JSON document that represents the input that the function receives from the event source. Test events are included in the `events` folder in this project.
-
-Run functions locally and invoke them with the `sam local invoke` command.
+Check results:
 
 ```bash
-file-processing-pipeline$ sam local invoke HelloWorldFunction --event events/event.json
+# Thumbnails
+aws s3 ls s3://file-pipeline-processed-<ACCOUNT_ID>/thumbnails/ --region ap-south-1
+
+# Extracted text
+aws s3 ls s3://file-pipeline-processed-<ACCOUNT_ID>/extracted-text/ --region ap-south-1
+
+# Metadata
+aws dynamodb scan --table-name FileMetadata --region ap-south-1
 ```
 
-The SAM CLI can also emulate your application's API. Use the `sam local start-api` to run the API locally on port 3000.
+## Security notes
 
-```bash
-file-processing-pipeline$ sam local start-api
-file-processing-pipeline$ curl http://localhost:3000/
-```
+- Each Lambda function has its own auto-generated, least-privilege IAM role (via SAM's `S3ReadPolicy`, `S3CrudPolicy`, `DynamoDBCrudPolicy` policy templates) — scoped only to the specific bucket/table it needs.
+- The CLI deploy user (`dev-sam-cli`) is scoped to a custom policy limited to this project's resources (CloudFormation, S3 buckets prefixed `file-pipeline-*`, this specific Lambda/DynamoDB resource set) rather than `AdministratorAccess`.
+- A billing alert/budget is configured to catch unexpected costs early.
 
-The SAM CLI reads the application template to determine the API's routes and the functions that they invoke. The `Events` property on each function's definition includes the route and method for each path.
+## Known design decisions
 
-```yaml
-      Events:
-        HelloWorld:
-          Type: Api
-          Properties:
-            Path: /hello
-            Method: get
-```
+- **S3 notification wiring is manual, not auto-generated by SAM.** Two Lambda functions triggering off the same bucket causes a circular CloudFormation dependency if you use SAM's built-in `Events: S3` shorthand on both functions. This is solved by defining `AWS::Lambda::Permission` resources explicitly and configuring the bucket's `NotificationConfiguration` by hand, with `DependsOn` enforcing creation order.
+- **DynamoDB stores only a text preview for PDFs**, not the full extracted text, to stay well under the 400KB per-item limit. Full text lives in S3.
 
-## Add a resource to your application
-The application template uses AWS Serverless Application Model (AWS SAM) to define application resources. AWS SAM is an extension of AWS CloudFormation with a simpler syntax for configuring common serverless application resources such as functions, triggers, and APIs. For resources not included in [the SAM specification](https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md), you can use standard [AWS CloudFormation](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-template-resource-type-ref.html) resource types.
+## Possible next steps
 
-## Fetch, tail, and filter Lambda function logs
-
-To simplify troubleshooting, SAM CLI has a command called `sam logs`. `sam logs` lets you fetch logs generated by your deployed Lambda function from the command line. In addition to printing the logs on the terminal, this command has several nifty features to help you quickly find the bug.
-
-`NOTE`: This command works for all AWS Lambda functions; not just the ones you deploy using SAM.
-
-```bash
-file-processing-pipeline$ sam logs -n HelloWorldFunction --stack-name file-processing-pipeline --tail
-```
-
-You can find more information and examples about filtering Lambda function logs in the [SAM CLI Documentation](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-sam-cli-logging.html).
-
-## Unit tests
-
-Tests are defined in the `hello-world/tests` folder in this project. Use NPM to install the [Mocha test framework](https://mochajs.org/) and run unit tests.
-
-```bash
-file-processing-pipeline$ cd hello-world
-hello-world$ npm install
-hello-world$ npm run test
-```
+- Add a status API (API Gateway + Lambda) to query processing status by `fileId` over HTTP
+- Widen image support to `.png` / `.jpeg`, and generate multiple thumbnail sizes
+- Add a Dead Letter Queue (SQS) and CloudWatch alarms for failed processing
+- Add S3 lifecycle rules to auto-expire old processed files and control storage costs
 
 ## Cleanup
 
-To delete the sample application that you created, use the AWS CLI. Assuming you used your project name for the stack name, you can run the following:
+To avoid any ongoing costs, tear down all resources when done experimenting:
 
 ```bash
-sam delete --stack-name file-processing-pipeline
+sam delete
 ```
 
-## Resources
-
-See the [AWS SAM developer guide](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/what-is-sam.html) for an introduction to SAM specification, the SAM CLI, and serverless application concepts.
-
-Next, you can use AWS Serverless Application Repository to deploy ready to use Apps that go beyond hello world samples and learn how authors developed their applications: [AWS Serverless Application Repository main page](https://aws.amazon.com/serverless/serverlessrepo/)
+This removes the CloudFormation stack and all resources it created (Lambda functions, S3 buckets, DynamoDB table). Note: S3 buckets must be empty before SAM can delete them — if `sam delete` fails on a non-empty bucket, empty it first with `aws s3 rm s3://<bucket-name> --recursive`.
