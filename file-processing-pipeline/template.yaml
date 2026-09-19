@@ -1,0 +1,112 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Serverless File-Processing Pipeline
+  S3 upload triggers Lambda (image resize / PDF parsing), metadata stored in DynamoDB
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 256
+    Runtime: nodejs20.x
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref FileMetadataTable
+        PROCESSED_BUCKET: !Ref ProcessedBucket
+
+Resources:
+
+  # ---------- Processed Bucket ----------
+  ProcessedBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "file-pipeline-processed-${AWS::AccountId}"
+
+  # ---------- DynamoDB Table ----------
+  FileMetadataTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      TableName: FileMetadata
+      PrimaryKey:
+        Name: fileId
+        Type: String
+
+  # ---------- Image Resize Lambda (no Events block here) ----------
+  ImageResizeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: image-resize/
+      Handler: app.handler
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Sub "file-pipeline-uploads-${AWS::AccountId}"
+        - S3CrudPolicy:
+            BucketName: !Ref ProcessedBucket
+        - DynamoDBCrudPolicy:
+            TableName: !Ref FileMetadataTable
+
+  # ---------- PDF Parse Lambda (no Events block here) ----------
+  PdfParseFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: pdf-parse/
+      Handler: app.handler
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Sub "file-pipeline-uploads-${AWS::AccountId}"
+        - S3CrudPolicy:
+            BucketName: !Ref ProcessedBucket
+        - DynamoDBCrudPolicy:
+            TableName: !Ref FileMetadataTable
+
+  # ---------- Permissions letting S3 invoke each Lambda ----------
+  ImageResizeFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ImageResizeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !Sub "arn:aws:s3:::file-pipeline-uploads-${AWS::AccountId}"
+      SourceAccount: !Ref AWS::AccountId
+
+  PdfParseFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref PdfParseFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !Sub "arn:aws:s3:::file-pipeline-uploads-${AWS::AccountId}"
+      SourceAccount: !Ref AWS::AccountId
+
+  # ---------- Upload Bucket (created LAST, with manual notification config) ----------
+  UploadBucket:
+    Type: AWS::S3::Bucket
+    DependsOn:
+      - ImageResizeFunctionPermission
+      - PdfParseFunctionPermission
+    Properties:
+      BucketName: !Sub "file-pipeline-uploads-${AWS::AccountId}"
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: suffix
+                    Value: .jpg
+            Function: !GetAtt ImageResizeFunction.Arn
+          - Event: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: suffix
+                    Value: .pdf
+            Function: !GetAtt PdfParseFunction.Arn
+
+Outputs:
+  UploadBucketName:
+    Value: !Ref UploadBucket
+  ProcessedBucketName:
+    Value: !Ref ProcessedBucket
+  MetadataTableName:
+    Value: !Ref FileMetadataTable

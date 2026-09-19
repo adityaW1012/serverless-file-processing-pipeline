@@ -1,0 +1,14 @@
+# Build artifacts
+.aws-sam/
+
+# Dependencies
+node_modules/
+
+# Environment/credentials — NEVER commit these
+.env
+*.pem
+*.csv
+
+# OS files
+.DS_Store
+Thumbs.db
