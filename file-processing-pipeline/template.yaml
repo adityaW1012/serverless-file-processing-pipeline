@@ -66,7 +66,7 @@ Resources:
             TableName: !Ref FileMetadataTable
 
   # ---------- Status API Lambda ----------
-  StatusApiFunction:
+    StatusApiFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: status-api/
@@ -74,6 +74,8 @@ Resources:
       Policies:
         - DynamoDBReadPolicy:
             TableName: !Ref FileMetadataTable
+        - S3ReadPolicy:
+            BucketName: !Ref ProcessedBucket
       Events:
         GetFiles:
           Type: Api

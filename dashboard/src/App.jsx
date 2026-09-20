@@ -109,7 +109,16 @@ function App() {
                 <td>{formatBytes(file.sizeBytes)}</td>
                 <td>{formatDate(file.createdAt)}</td>
                 <td>
-                  {file.status === "PROCESSED" ? (
+                  {file.status === "PROCESSED" && file.downloadUrl ? (
+                    <a
+                      href={file.downloadUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="download-link"
+                    >
+                      ⬇ Download
+                    </a>
+                  ) : file.status === "PROCESSED" ? (
                     <span className="result-key">{file.processedKey}</span>
                   ) : (
                     <span className="error-msg">{file.error || "—"}</span>
